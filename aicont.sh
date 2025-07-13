@@ -2,27 +2,27 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: $0 -t ext1,ext2,... <directory>"
+  echo "Usage: $0 -t ext1,ext2,... [-s dir1,dir2,...] <directory>"
   echo
   echo "  -t    comma-separated list of file extensions to include (no leading dots)."
   echo "        e.g. \"cpp,h,txt\""
+  echo "  -s    comma-separated list of subdirectory paths (relative to root) to exclude."
   echo "  directory  root directory to search (required)."
   exit 1
 }
 
-# At least one arg (the directory) is required
-if [ $# -eq 0 ]; then
-  usage
-fi
-
-# Default: no type filter
 types=()
+exclude_subdirs=()
 
 # Parse options
-while getopts ":t:" opt; do
+while getopts ":t:s:" opt; do
   case $opt in
     t)
       IFS=',' read -r -a types <<< "$OPTARG"
+      ;;
+    s)
+      IFS=',' read -r -a dirs <<< "$OPTARG"
+      exclude_subdirs+=("${dirs[@]}")
       ;;
     \?)
       echo "Unknown option: -$OPTARG" >&2
@@ -36,14 +36,13 @@ while getopts ":t:" opt; do
 done
 shift $((OPTIND -1))
 
-# Now the directory is mandatory
+# Check directory argument
 if [ $# -lt 1 ]; then
   echo "Error: <directory> is required." >&2
   usage
 fi
 start_dir="$1"
 
-# Verify start_dir exists
 if [ ! -d "$start_dir" ]; then
   echo "Error: directory '$start_dir' does not exist." >&2
   exit 1
@@ -52,13 +51,20 @@ fi
 output_file="ai-context.txt"
 > "$output_file"
 
-# Build the find command, excluding the output file itself
+# Start building find expression
 find_expr=(find "$start_dir" -type f ! -name "$output_file")
 
+# Add exclusions for subdirectories
+for subdir in "${exclude_subdirs[@]}"; do
+  full_path="$start_dir/$subdir"
+  find_expr+=( ! -path "$full_path/*" )
+done
+
+# Add extension filtering
 if [ ${#types[@]} -gt 0 ]; then
   find_expr+=( \( )
   for i in "${!types[@]}"; do
-    ext="${types[i]#\.}"            # strip any leading dot
+    ext="${types[i]#\.}"
     find_expr+=( -iname "*.${ext}" )
     if [ $i -lt $(( ${#types[@]} - 1 )) ]; then
       find_expr+=( -o )
@@ -67,13 +73,11 @@ if [ ${#types[@]} -gt 0 ]; then
   find_expr+=( \) )
 fi
 
-# Execute find; skip binaries in the loop
+# Run find and process files
 "${find_expr[@]}" | while IFS= read -r file; do
-  # skip binary files
   if ! grep -Iq . "$file"; then
     continue
   fi
-
   printf "\n===== %s =====\n\n" "$file" >> "$output_file"
   cat "$file" >> "$output_file"
 done
